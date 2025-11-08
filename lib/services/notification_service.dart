@@ -1,6 +1,7 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'dart:convert'; // Para codificar/decodificar JSON
 
 // Importa las variables globales de main.dart
 import '../main.dart'; 
@@ -69,7 +70,23 @@ class NotificationService {
       onDidReceiveNotificationResponse: (NotificationResponse response) {
         if (response.payload != null && response.payload!.isNotEmpty) {
           print('Notificación tocada con payload: ${response.payload}');
-          _navigateToPromotion(response.payload!);
+          try {
+            // Decodificar el JSON del payload
+            Map<String, dynamic> payloadData = jsonDecode(response.payload!);
+            _navigateToPromotion(
+              payloadData['promotionId'] ?? 'default_id',
+              payloadData['title'] ?? 'Sin título',
+              payloadData['body'] ?? 'Sin contenido',
+            );
+          } catch (e) {
+            print('Error al decodificar payload: $e');
+            // Si hay error, usar valores por defecto
+            _navigateToPromotion(
+              response.payload!,
+              'Nueva Promoción',
+              'Toca para ver más detalles'
+            );
+          }
         }
       },
     );
@@ -82,7 +99,16 @@ class NotificationService {
     AndroidNotification? android = message.notification?.android;
     
     if (notification != null && android != null) {
-      // VERSIÓN SIMPLIFICADA: Sin vibración personalizada
+      // Crear un mapa con todos los datos de la notificación
+      Map<String, dynamic> payloadData = {
+        'promotionId': message.data['promotionId'] ?? 'default_id',
+        'title': notification.title ?? 'Nueva Promoción',
+        'body': notification.body ?? 'Toca para ver más detalles',
+      };
+      
+      // Convertir a JSON string para el payload
+      String payload = jsonEncode(payloadData);
+      
       flutterLocalNotificationsPlugin.show(
         notification.hashCode,
         notification.title ?? 'Nueva promoción',
@@ -103,27 +129,36 @@ class NotificationService {
             autoCancel: true,
           ),
         ),
-        payload: message.data['promotionId'] ?? 'default_id',
+        payload: payload, // Enviar todos los datos como JSON
       );
     }
   }
 
   void _handleMessageTap(RemoteMessage message) {
     final String? promotionId = message.data['promotionId'];
+    final String title = message.notification?.title ?? 'Nueva Promoción';
+    final String body = message.notification?.body ?? 'Toca para ver más detalles';
+    
     if (promotionId != null) {
-      _navigateToPromotion(promotionId);
+      _navigateToPromotion(promotionId, title, body);
     } else {
       print('No se encontró promotionId en el mensaje');
+      // Navegar incluso sin promotionId, mostrando título y cuerpo
+      _navigateToPromotion('default_id', title, body);
     }
   }
 
-  void _navigateToPromotion(String promotionId) {
-    print('Navegando a promoción con ID: $promotionId');
+  void _navigateToPromotion(String promotionId, String title, String body) {
+    print('Navegando a promoción con ID: $promotionId, Título: $title');
     
     Future.delayed(Duration(milliseconds: 500), () {
       navigatorKey.currentState?.pushNamed(
         '/promotion-details',
-        arguments: promotionId,
+        arguments: {
+          'promotionId': promotionId,
+          'title': title,
+          'body': body,
+        },
       );
     });
   }
