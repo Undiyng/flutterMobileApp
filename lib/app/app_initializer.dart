@@ -17,22 +17,50 @@ class AppInitializer {
 
   static Future<void> _initializeFirebase() async {
     await Firebase.initializeApp();
-    FirebaseMessaging.onBackgroundMessage(NotificationService.firebaseMessagingBackgroundHandler);
+    
+    FirebaseMessaging.onBackgroundMessage(
+      NotificationService.firebaseMessagingBackgroundHandler
+    );
   }
 
   static Future<void> _setupLocalNotifications() async {
     flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
     
+    // Configuración del canal SIN sonido personalizado
     channel = const AndroidNotificationChannel(
-      'promotions_channel',
-      'Promociones Importantes',
-      description: 'Canal para notificaciones de promociones.',
+      'high_importance_channel',
+      'Notificaciones Importantes',
+      description: 'Este canal se usa para notificaciones importantes.',
       importance: Importance.max,
+      playSound: true, // Sonido por defecto
+      enableVibration: true,
+      ledColor: Colors.blue,
+      showBadge: true,
     );
 
-    await flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+    final AndroidFlutterLocalNotificationsPlugin? androidPlugin = 
+        flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    
+    await androidPlugin?.createNotificationChannel(channel);
+    print('✅ Canal de notificaciones creado: ${channel.id}');
+
+    const AndroidInitializationSettings androidSettings = 
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    
+    const DarwinInitializationSettings iosSettings = 
+        DarwinInitializationSettings(
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
+        );
+
+    const InitializationSettings initializationSettings = 
+        InitializationSettings(
+          android: androidSettings,
+          iOS: iosSettings,
+        );
+
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
     await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
       alert: true,
@@ -42,10 +70,12 @@ class AppInitializer {
   }
 
   static Future<void> _setupNotificationService() async {
-    await NotificationService(
+    final notificationService = NotificationService(
       navigatorKey: navigatorKey,
       flutterLocalNotificationsPlugin: flutterLocalNotificationsPlugin,
       channel: channel,
-    ).init();
+    );
+    
+    await notificationService.init();
   }
 }

@@ -5,6 +5,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
 import '../app/routes/app_routes.dart';
 
+// AÑADE ESTA ANOTACIÓN A LA CLASE
+@pragma('vm:entry-point')
 class NotificationService {
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
   final GlobalKey<NavigatorState> navigatorKey;
@@ -12,6 +14,7 @@ class NotificationService {
   final AndroidNotificationChannel channel;
 
   bool _isNotificationHandled = false;
+  int _notificationId = 0;
 
   NotificationService({
     required this.navigatorKey,
@@ -19,136 +22,257 @@ class NotificationService {
     required this.channel,
   });
 
-  // Manejador de background como método estático
+  // Handler de background
   @pragma('vm:entry-point')
   static Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await Firebase.initializeApp();
-    
-    print("Handling a background message: ${message.messageId}");
+    print("🔄 Handling background message: ${message.messageId}");
+
+    // En segundo plano, FCM maneja la notificación automáticamente
+    // Solo necesitamos asegurar que el canal existe
+    final FlutterLocalNotificationsPlugin backgroundPlugin = FlutterLocalNotificationsPlugin();
     
     const AndroidNotificationChannel backgroundChannel = AndroidNotificationChannel(
-      'promotions_channel_background',
-      'Promociones Importantes',
-      description: 'Canal para notificaciones de promociones en background.',
+      'high_importance_channel',
+      'Notificaciones Importantes',
+      description: 'Este canal se usa para notificaciones importantes.',
       importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
     );
 
-    FlutterLocalNotificationsPlugin backgroundPlugin = FlutterLocalNotificationsPlugin();
-    
     await backgroundPlugin
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(backgroundChannel);
-
-    const InitializationSettings initializationSettings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      iOS: DarwinInitializationSettings(),
-    );
+        
+    print("✅ Canal de background verificado");
     
-    await backgroundPlugin.initialize(initializationSettings);
+    // MOSTRAR NOTIFICACIÓN EN SEGUNDO PLANO
+    await _showBackgroundNotification(backgroundPlugin, message);
+  }
 
-    RemoteNotification? notification = message.notification;
-    AndroidNotification? android = message.notification?.android;
-    
-    if (notification != null && android != null) {
-      await backgroundPlugin.show(
-        notification.hashCode,
-        notification.title,
-        notification.body,
-        NotificationDetails(
-          android: AndroidNotificationDetails(
-            backgroundChannel.id,
-            backgroundChannel.name,
-            channelDescription: backgroundChannel.description,
-            icon: android.smallIcon ?? '@mipmap/ic_launcher',
-            importance: Importance.max,
-            priority: Priority.high,
-            showWhen: true,
+  static Future<void> _showBackgroundNotification(
+    FlutterLocalNotificationsPlugin plugin, 
+    RemoteMessage message
+  ) async {
+    final notification = message.notification;
+    final data = message.data;
+
+    if (notification != null) {
+      final String title = notification.title ?? data['title'] ?? 'Nueva Promoción';
+      final String body = notification.body ?? data['body'] ?? data['message'] ?? 'Toca para ver más detalles';
+      final String promotionId = data['promotionId'] ?? 
+                                data['promotion_id'] ?? 
+                                data['id'] ?? 
+                                'default_id';
+
+      final Map<String, dynamic> payloadData = {
+        'promotionId': promotionId,
+        'title': title,
+        'body': body,
+      };
+      payloadData.addAll(data);
+
+      try {
+        // CONFIGURACIÓN PARA BANNERS EN SEGUNDO PLANO
+        const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+          'high_importance_channel',
+          'Notificaciones Importantes',
+          channelDescription: 'Este canal se usa para notificaciones importantes.',
+          importance: Importance.max,
+          priority: Priority.high,
+          ticker: 'Nueva promoción disponible',
+          playSound: true,
+          enableVibration: true,
+          color: Colors.blue,
+          ledColor: Colors.blue,
+          ledOnMs: 1000,
+          ledOffMs: 500,
+          showWhen: true,
+          autoCancel: true,
+          visibility: NotificationVisibility.public,
+          timeoutAfter: 10000,
+          styleInformation: BigTextStyleInformation(''),
+        );
+
+        const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        );
+
+        int notificationId = (message.messageId?.hashCode ?? DateTime.now().millisecondsSinceEpoch) % 2147483647;
+        
+        await plugin.show(
+          notificationId,
+          title,
+          body,
+          const NotificationDetails(
+            android: androidDetails,
+            iOS: iosDetails,
           ),
-        ),
-        payload: message.data['promotionId'],
-      );
+          payload: jsonEncode(payloadData),
+        );
+        
+        print("✅ Notificación de BACKGROUND mostrada: $title");
+      } catch (e) {
+        print("❌ Error en background notification: $e");
+      }
     }
   }
 
+  // ... (el resto del código se mantiene igual)
   Future<void> init() async {
-    NotificationSettings settings = await _fcm.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    try {
+      _setupLocalNotificationHandlers();
 
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      print('Permiso de notificación concedido.');
-      
-      await _fcm.subscribeToTopic('new_promotions');
-      print('Suscrito al topic: new_promotions');
+      final NotificationSettings settings = await _fcm.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+        provisional: false,
+      );
 
-      _initLocalNotifications();
-      _setupFirebaseListeners();
-      _configureBackgroundNotifications();
-    } else {
-      print('Permiso de notificación denegado.');
+      print('📱 Estado de permisos: ${settings.authorizationStatus}');
+
+      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+        print('✅ Permiso de notificación concedido.');
+        
+        await _fcm.subscribeToTopic('new_promotions');
+        print('✅ Suscrito al topic: new_promotions');
+
+        _setupFirebaseListeners();
+
+        final String? token = await _fcm.getToken();
+        print('🔥 FCM Token: $token');
+
+      } else {
+        print('❌ Permiso de notificación denegado.');
+      }
+    } catch (e) {
+      print('❌ Error inicializando notificaciones: $e');
     }
+  }
+
+  void _setupLocalNotificationHandlers() {
+    flutterLocalNotificationsPlugin.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        iOS: DarwinInitializationSettings(),
+      ),
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        _handleLocalNotificationTap(response);
+      },
+    );
   }
 
   void _setupFirebaseListeners() {
-    FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
-    FirebaseMessaging.onMessageOpenedApp.listen(_handleMessageTap);
-    
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      print('📱 Mensaje en FOREGROUND recibido: ${message.messageId}');
+      _handleForegroundMessage(message);
+    });
+
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      print('📱 App abierta desde BACKGROUND: ${message.data}');
+      _handleMessageTap(message);
+    });
+
     _fcm.getInitialMessage().then((RemoteMessage? message) {
       if (message != null) {
-        print('App abierta desde notificación con app terminada: ${message.data}');
-        Future.delayed(Duration(milliseconds: 1000), () {
+        print('📱 App abierta desde TERMINATED: ${message.data}');
+        Future.delayed(const Duration(milliseconds: 1500), () {
           _handleMessageTap(message);
         });
       }
     });
   }
 
-  void _configureBackgroundNotifications() {
-    FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
-  }
+  void _handleForegroundMessage(RemoteMessage message) {
+    print('🎯 Creando notificación local para FOREGROUND');
+    
+    final notification = message.notification;
+    final data = message.data;
 
-  void _initLocalNotifications() {
-    const InitializationSettings initializationSettings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      iOS: DarwinInitializationSettings(),
+    String title = notification?.title ?? data['title'] ?? 'Nueva Promoción';
+    String body = notification?.body ?? data['body'] ?? data['message'] ?? 'Toca para ver más detalles';
+    String promotionId = data['promotionId'] ?? 
+                        data['promotion_id'] ?? 
+                        data['id'] ?? 
+                        'default_id';
+
+    final Map<String, dynamic> payloadData = {
+      'promotionId': promotionId,
+      'title': title,
+      'body': body,
+    };
+    payloadData.addAll(data);
+
+    final String payload = jsonEncode(payloadData);
+
+    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      'high_importance_channel',
+      'Notificaciones Importantes',
+      channelDescription: 'Este canal se usa para notificaciones importantes.',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+      color: Colors.blue,
+      ledColor: Colors.blue,
+      ledOnMs: 1000,
+      ledOffMs: 500,
+      showWhen: true,
+      autoCancel: true,
+      ticker: title,
+      visibility: NotificationVisibility.public,
+      styleInformation: BigTextStyleInformation(body, htmlFormatBigText: true),
     );
 
-    flutterLocalNotificationsPlugin.initialize(
-      initializationSettings,
-      onDidReceiveNotificationResponse: _handleLocalNotificationTap,
+    final DarwinNotificationDetails iosDetails = const DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
     );
+
+    _notificationId = (_notificationId + 1) % 10000;
+    
+    flutterLocalNotificationsPlugin.show(
+      _notificationId,
+      title,
+      body,
+      NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      ),
+      payload: payload,
+    );
+    
+    print('✅ Notificación en foreground DISPARADA: $title');
   }
 
   void _handleLocalNotificationTap(NotificationResponse response) {
     if (_isNotificationHandled) return;
     _isNotificationHandled = true;
-    
-    print('Notificación local tocada con payload: ${response.payload}');
+
+    print('👆 Notificación local tocada: ${response.payload}');
     
     if (response.payload != null && response.payload!.isNotEmpty) {
       try {
-        Map<String, dynamic> payloadData = jsonDecode(response.payload!);
+        final Map<String, dynamic> payloadData = jsonDecode(response.payload!);
         _navigateToPromotion(
-          payloadData['promotionId'] ?? 'default_id',
-          payloadData['title'] ?? 'Sin título',
-          payloadData['body'] ?? 'Sin contenido',
+          payloadData['promotionId']?.toString() ?? 'default_id',
+          payloadData['title']?.toString() ?? 'Sin título',
+          payloadData['body']?.toString() ?? 'Sin contenido',
         );
       } catch (e) {
-        print('Error al decodificar payload: $e');
+        print('❌ Error decodificando payload: $e');
         _navigateToPromotion(
-          response.payload!,
+          'default_id',
           'Nueva Promoción',
           'Toca para ver más detalles'
         );
       }
     } else {
-      print('Payload vacío en notificación local');
       _navigateToPromotion(
         'default_id',
         'Nueva Promoción',
@@ -159,56 +283,11 @@ class NotificationService {
     _resetNotificationHandler();
   }
 
-  void _handleForegroundMessage(RemoteMessage message) {
-    print('Mensaje en foreground: ${message.notification?.title}');
-    
-    RemoteNotification? notification = message.notification;
-    AndroidNotification? android = message.notification?.android;
-    
-    if (notification != null) {
-      Map<String, dynamic> payloadData = {
-        'promotionId': message.data['promotionId'] ?? 
-                      message.data['promotion_id'] ?? 
-                      message.data['id'] ?? 
-                      'default_id',
-        'title': notification.title ?? 'Nueva Promoción',
-        'body': notification.body ?? 'Toca para ver más detalles',
-      };
-      
-      payloadData.addAll(message.data);
-      
-      String payload = jsonEncode(payloadData);
-      
-      flutterLocalNotificationsPlugin.show(
-        DateTime.now().millisecondsSinceEpoch,
-        notification.title ?? 'Nueva promoción',
-        notification.body ?? 'Toca para ver los detalles',
-        NotificationDetails(
-          android: AndroidNotificationDetails(
-            channel.id,
-            channel.name,
-            channelDescription: channel.description,
-            icon: android?.smallIcon ?? '@mipmap/ic_launcher',
-            importance: Importance.max,
-            priority: Priority.high,
-            color: Colors.blue,
-            enableVibration: true,
-            playSound: true,
-            timeoutAfter: 5000,
-            showWhen: true,
-            autoCancel: true,
-          ),
-        ),
-        payload: payload,
-      );
-    }
-  }
-
   void _handleMessageTap(RemoteMessage message) {
     if (_isNotificationHandled) return;
     _isNotificationHandled = true;
 
-    print('Manejando tap de mensaje FCM: ${message.data}');
+    print('👆 Mensaje FCM tocado: ${message.data}');
     
     final String promotionId = message.data['promotionId'] ?? 
                               message.data['promotion_id'] ?? 
@@ -229,15 +308,15 @@ class NotificationService {
   }
 
   void _resetNotificationHandler() {
-    Future.delayed(Duration(seconds: 2), () {
+    Future.delayed(const Duration(seconds: 3), () {
       _isNotificationHandled = false;
     });
   }
 
   void _navigateToPromotion(String promotionId, String title, String body) {
-    print('Navegando a promoción con ID: $promotionId, Título: $title');
+    print('🧭 Navegando a promoción: $promotionId');
     
-    Future.delayed(Duration(milliseconds: 300), () {
+    Future.delayed(const Duration(milliseconds: 500), () {
       if (navigatorKey.currentState?.mounted ?? false) {
         navigatorKey.currentState?.pushNamedAndRemoveUntil(
           AppRoutes.promotionDetails,
@@ -248,8 +327,10 @@ class NotificationService {
             'body': body,
           },
         );
+        print('✅ Navegación exitosa a detalles de promoción');
       } else {
-        Future.delayed(Duration(milliseconds: 500), () {
+        print('⚠️ Navigator no disponible, reintentando...');
+        Future.delayed(const Duration(milliseconds: 1000), () {
           if (navigatorKey.currentState?.mounted ?? false) {
             navigatorKey.currentState?.pushNamed(
               AppRoutes.promotionDetails,
