@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 class PromotionDetailsPage extends StatelessWidget {
+  const PromotionDetailsPage({super.key});
+
   @override
   Widget build(BuildContext context) {
     // Recibe el ID de la promoción pasado como argumento

@@ -12,7 +12,6 @@ class NotificationService {
   NotificationService({required this.navigatorKey});
 
   Future<void> init() async {
-    // 1. Solicitar permisos (iOS y Android 13+)
     NotificationSettings settings = await _fcm.requestPermission(
       alert: true,
       badge: true,
@@ -22,94 +21,110 @@ class NotificationService {
     if (settings.authorizationStatus == AuthorizationStatus.authorized) {
       print('Permiso de notificación concedido.');
       
-      // 2. Suscribirse al Topic (¡Clave!)
-      // El backend debe enviar a este mismo topic.
       await _fcm.subscribeToTopic('new_promotions');
       print('Suscrito al topic: new_promotions');
 
-      // 3. Inicializar el plugin local (para manejo de toques)
       _initLocalNotifications();
 
-      // 4. Manejar mensajes en FOREGROUND
-      FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        print('Mensaje en foreground recibido: ${message.messageId}');
+        _handleForegroundMessage(message);
+      });
 
-      // 5. Manejar toque en notificación (App en BACKGROUND)
-      FirebaseMessaging.onMessageOpenedApp.listen(_handleMessageTap);
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        print('App abierta desde notificación en background: ${message.data['promotionId']}');
+        _handleMessageTap(message);
+      });
 
-      // 6. Manejar toque en notificación (App TERMINADA)
       _fcm.getInitialMessage().then((RemoteMessage? message) {
         if (message != null) {
+          print('App abierta desde notificación con app terminada: ${message.data['promotionId']}');
           _handleMessageTap(message);
         }
       });
+
+      _configureBackgroundNotifications();
 
     } else {
       print('Permiso de notificación denegado.');
     }
   }
 
-  // Inicializa el plugin local y define el callback de toque
+  void _configureBackgroundNotifications() {
+    FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+  }
+
   void _initLocalNotifications() {
     const InitializationSettings initializationSettings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'), // Tu ícono
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       iOS: DarwinInitializationSettings(),
     );
 
     flutterLocalNotificationsPlugin.initialize(
       initializationSettings,
-      // Callback cuando se toca una notificación (mostrada localmente)
       onDidReceiveNotificationResponse: (NotificationResponse response) {
         if (response.payload != null && response.payload!.isNotEmpty) {
+          print('Notificación tocada con payload: ${response.payload}');
           _navigateToPromotion(response.payload!);
         }
       },
     );
   }
 
-  // Maneja un mensaje recibido mientras la app está en PRIMER PLANO
   void _handleForegroundMessage(RemoteMessage message) {
-    print('Got a message whilst in the foreground!');
+    print('Mensaje en foreground: ${message.notification?.title}');
     
     RemoteNotification? notification = message.notification;
     AndroidNotification? android = message.notification?.android;
     
-    // Si es un mensaje de notificación y estamos en Android
     if (notification != null && android != null) {
-      // Muestra la notificación usando el plugin local
+      // VERSIÓN SIMPLIFICADA: Sin vibración personalizada
       flutterLocalNotificationsPlugin.show(
         notification.hashCode,
-        notification.title,
-        notification.body,
+        notification.title ?? 'Nueva promoción',
+        notification.body ?? 'Toca para ver los detalles',
         NotificationDetails(
           android: AndroidNotificationDetails(
-            channel.id, // ID del canal de main.dart
+            channel.id,
             channel.name,
             channelDescription: channel.description,
             icon: android.smallIcon ?? '@mipmap/ic_launcher',
+            importance: Importance.max,
+            priority: Priority.high,
+            color: Colors.blue,
+            enableVibration: true,
+            playSound: true,
+            timeoutAfter: 5000,
+            showWhen: true,
+            autoCancel: true,
           ),
         ),
-        // 'payload' son los datos que pasamos al callback de toque
-        // Usamos el 'data' payload que enviaste desde tu backend
-        payload: message.data['promotionId'], 
+        payload: message.data['promotionId'] ?? 'default_id',
       );
     }
   }
 
-  // Maneja el TOQUE en una notificación (Background o Terminated)
   void _handleMessageTap(RemoteMessage message) {
-    print('App abierta desde notificación: ${message.data['promotionId']}');
     final String? promotionId = message.data['promotionId'];
     if (promotionId != null) {
       _navigateToPromotion(promotionId);
+    } else {
+      print('No se encontró promotionId en el mensaje');
     }
   }
 
-  // Función de ayuda para navegar
   void _navigateToPromotion(String promotionId) {
-    // Usa la GlobalKey para navegar
-    navigatorKey.currentState?.pushNamed(
-      '/promotion-details',
-      arguments: promotionId,
-    );
+    print('Navegando a promoción con ID: $promotionId');
+    
+    Future.delayed(Duration(milliseconds: 500), () {
+      navigatorKey.currentState?.pushNamed(
+        '/promotion-details',
+        arguments: promotionId,
+      );
+    });
   }
 }

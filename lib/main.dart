@@ -11,35 +11,75 @@ import 'services/notification_service.dart'; // Importamos el servicio
 // ---------- CONFIGURACIÓN GLOBAL ----------
 
 // 1. Clave Global para Navegación
-// Necesaria para navegar desde el servicio de notificaciones
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // 2. Instancias de notificación (para ser accesibles globalmente)
 late FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin;
 late AndroidNotificationChannel channel;
 
-// 3. Handler de mensajes en Background/Terminated
-// ESTA FUNCIÓN DEBE ESTAR FUERA DE CUALQUIER CLASE (ser "top-level")
+// 3. Handler de mensajes en Background/Terminated - MODIFICADO
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // Asegúrate de inicializar Firebase para que funcione en segundo plano
   await Firebase.initializeApp();
   
   print("Handling a background message: ${message.messageId}");
-  // Aquí puedes ejecutar lógica de fondo si es necesario,
-  // como guardar datos en SharedPreferences.
+  
+  // INICIO: NUEVO CÓDIGO PARA MOSTRAR NOTIFICACIÓN EN BACKGROUND
+  // Configurar el canal de notificaciones para background
+  const AndroidNotificationChannel backgroundChannel = AndroidNotificationChannel(
+    'promotions_channel_background', // ID diferente para background
+    'Promociones Importantes',
+    description: 'Canal para notificaciones de promociones en background.',
+    importance: Importance.max,
+  );
+
+  // Inicializar plugin local para background
+  FlutterLocalNotificationsPlugin backgroundPlugin = FlutterLocalNotificationsPlugin();
+  
+  // Crear el canal
+  await backgroundPlugin
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(backgroundChannel);
+
+  // Inicializar el plugin
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    iOS: DarwinInitializationSettings(),
+  );
+  
+  await backgroundPlugin.initialize(initializationSettings);
+
+  // Mostrar la notificación
+  RemoteNotification? notification = message.notification;
+  AndroidNotification? android = message.notification?.android;
+  
+  if (notification != null && android != null) {
+    await backgroundPlugin.show(
+      notification.hashCode,
+      notification.title,
+      notification.body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          backgroundChannel.id,
+          backgroundChannel.name,
+          channelDescription: backgroundChannel.description,
+          icon: android.smallIcon ?? '@mipmap/ic_launcher',
+          importance: Importance.max,
+          priority: Priority.high,
+          showWhen: true,
+        ),
+      ),
+      payload: message.data['promotionId'],
+    );
+  }
+  // FIN: NUEVO CÓDIGO PARA MOSTRAR NOTIFICACIÓN EN BACKGROUND
 }
 // ------------------------------------------
 
-
 void main() async {
-  // 1. Asegurar la inicialización de Flutter
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // 2. Inicializar Firebase Core
   await Firebase.initializeApp();
 
-  // 3. Asignar el handler de mensajes en segundo plano
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   // 4. Configurar el Canal de Android para notificaciones locales (Foreground)
@@ -59,30 +99,27 @@ void main() async {
       ?.createNotificationChannel(channel);
 
   // 6. Configurar permisos de iOS para foreground
-  // (Esto es manejado por el SDK de firebase_messaging)
   await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-    alert: true, // Requerido
+    alert: true,
     badge: true,
     sound: true,
   );
 
-  // 7. Correr la aplicación
   runApp(MyApp());
   
   // 8. Inicializar nuestro servicio de notificaciones
-  // Lo hacemos después de runApp para que el navigatorKey esté listo
   NotificationService(navigatorKey: navigatorKey).init();
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'App de Promociones',
-      // Asignamos la clave de navegación global
       navigatorKey: navigatorKey,
       initialRoute: '/',
-      // Definimos las rutas de la aplicación
       routes: {
         '/': (context) => HomePage(),
         '/promotion-details': (context) => PromotionDetailsPage(),
