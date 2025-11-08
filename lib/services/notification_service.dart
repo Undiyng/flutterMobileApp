@@ -126,6 +126,12 @@ class NotificationService {
     try {
       _setupLocalNotificationHandlers();
 
+      // Ensure the Android notification channel exists (important for lock-screen visibility)
+      await flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(channel);
+
+
       final NotificationSettings settings = await _fcm.requestPermission(
         alert: true,
         badge: true,
@@ -210,9 +216,11 @@ class NotificationService {
     final String payload = jsonEncode(payloadData);
 
     final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'high_importance_channel',
-      'Notificaciones Importantes',
-      channelDescription: 'Este canal se usa para notificaciones importantes.',
+      // Use the channel provided to this service so that channel-level settings
+      // (importance, visibility, sound, etc.) are consistent and applied.
+      channel.id,
+      channel.name,
+      channelDescription: channel.description,
       importance: Importance.max,
       priority: Priority.high,
       playSound: true,
